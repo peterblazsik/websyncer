@@ -1,35 +1,71 @@
-import React from 'react';
-import { Scan } from 'lucide-react';
+import React from "react";
+import { Link, useLocation } from "react-router-dom";
 
 export const Header: React.FC = () => {
-    return (
-        <header className="bg-amazon-dark text-white p-3 sticky top-0 z-50">
-            <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-                {/* Logo Area */}
-                <div className="flex items-center gap-2 border border-transparent hover:border-white p-1 rounded cursor-pointer transition-colors">
-                    <div className="flex flex-col relative">
-                        <span className="text-2xl font-bold tracking-tighter leading-none font-display">ORTHOSCAN</span>
-                        <span className="text-[10px] text-amazon-button absolute -bottom-2 right-0 font-sans">marketing</span>
-                    </div>
-                </div>
+  const location = useLocation();
 
-                {/* Right Nav */}
-                <div className="flex items-center gap-6 text-sm font-medium">
-                    <div className="border border-transparent hover:border-white p-2 rounded cursor-pointer">
-                        <span className="text-gray-300 block text-xs leading-none">Powered by</span>
-                        <span className="font-bold">Nano Banana</span>
-                    </div>
-                </div>
-            </div>
+  const navLinks = [
+    { path: "/", label: "Home" },
+    { path: "/marketing", label: "Marketing" },
+    { path: "/branding", label: "Branding" },
+    { path: "/webp", label: "WebP" },
+    { path: "/heic", label: "HEIC" },
+    { path: "/screenshots", label: "Screenshots" },
+    { path: "/icons", label: "Icons" },
+  ];
 
-            {/* Secondary Nav Bar */}
-            <div className="bg-amazon-light h-10 -mx-3 mt-3 px-4 flex items-center text-sm text-white space-x-5 overflow-hidden">
-                <span className="flex items-center gap-1 font-bold cursor-pointer hover:underline border border-transparent p-1"><Scan size={18} /> All</span>
-                <span className="cursor-pointer hover:underline border border-transparent p-1">Campaigns</span>
-                <span className="cursor-pointer hover:underline border border-transparent p-1">Assets</span>
-                <span className="cursor-pointer hover:underline border border-transparent p-1">Fitness</span>
-                <span className="cursor-pointer hover:underline border border-transparent p-1">Custom Soles</span>
-            </div>
-        </header>
-    );
+  return (
+    <header className="bg-black sticky top-0 z-50 border-b border-brand-border">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        {/* Logo Area */}
+        <Link to="/" className="flex items-center gap-3">
+          <img
+            src="/assets/websyncer-logo.png"
+            alt="WebSyncer"
+            className="h-8 w-8 rounded-lg"
+          />
+          <span className="text-2xl font-bold text-white uppercase tracking-tight">
+            Web
+            <span className="font-light" style={{ color: "#fa642c" }}>
+              Syncer
+            </span>
+          </span>
+        </Link>
+
+        {/* Navigation */}
+        <nav className="hidden md:flex items-center gap-1">
+          {navLinks.map((link) => (
+            <Link
+              key={link.path}
+              to={link.path}
+              className={`px-4 py-2 text-sm font-medium uppercase tracking-wide transition-colors rounded ${
+                location.pathname === link.path
+                  ? "text-white bg-white/10"
+                  : "text-brand-muted hover:text-white"
+              }`}
+            >
+              {link.label}
+            </Link>
+          ))}
+        </nav>
+
+        {/* Mobile Menu Button (optional - can be expanded later) */}
+        <button className="md:hidden text-white p-2">
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 6h16M4 12h16M4 18h16"
+            />
+          </svg>
+        </button>
+      </div>
+    </header>
+  );
 };

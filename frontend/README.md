@@ -1,73 +1,128 @@
-# React + TypeScript + Vite
+# WebSyncer - ARTIN Branding Asset Generator
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AI-powered image generation tool for ARTIN brand assets using Google Imagen 4.0.
 
-Currently, two official plugins are available:
+## Overview
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+WebSyncer generates premium marketing images for ARTIN (OrthoScan's hyperpersonalized orthopedic insole brand). Features include:
 
-## React Compiler
+- **29 pre-configured image prompts** across 5 categories
+- **Editable prompts** - customize any prompt before generation
+- **Auto-save to filesystem** via local saver service
+- **Batch generation** with progress tracking
+- **Rate limit management** with VIP support
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Categories
 
-## Expanding the ESLint configuration
+| Category | Count | Description |
+|----------|-------|-------------|
+| Hero | 6 | Athletic action shots for homepage |
+| Features | 4 | Product feature highlights |
+| Process | 6 | Customer journey visualization |
+| Lifestyle | 6 | Sports lifestyle photography |
+| Product | 7 | Product gallery with multiple angles |
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Tech Stack
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- **Frontend**: React 19 + TypeScript + Vite + Tailwind CSS
+- **Backend**: Cloudflare Workers
+- **AI**: Google Imagen 4.0 (Generative Language API)
+- **Local Saver**: Node.js service with macOS Launch Agent
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Getting Started
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Run tests
+npm run test
+
+# Build for production
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## URLs
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- **Frontend**: https://websyncer.pages.dev/branding
+- **Backend API**: https://websyncer-api.orthoscan-pb.workers.dev
+- **Local Saver**: http://localhost:3456 (when running)
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Project Structure
+
 ```
+frontend/
+  src/
+    components/branding/   # UI components
+      ImageCard.tsx        # Individual image card with editable prompt
+      ImageGrid.tsx        # Grid layout for images
+      CategorySelector.tsx # Category tabs
+      BatchProgressModal.tsx
+    lib/
+      brandingConfig.ts    # Image specs and prompts (29 images)
+      imageProcessing.ts   # WebP conversion utilities
+    pages/
+      BrandingGenerator.tsx # Main page component
+    types/
+      branding.ts          # TypeScript types
+
+backend/
+  src/
+    index.ts              # Cloudflare Worker with rate limiting
+
+local-saver/
+  save-server.js          # Node.js filesystem saver
+```
+
+## Features
+
+### Editable Prompts
+Each image card has a collapsible prompt editor:
+- Click "Prompt" to expand
+- Edit the prompt text
+- Amber dot indicates modifications
+- "Reset to default" restores original prompt
+- Custom prompts are passed to the API on generate
+
+### Auto-Save
+When the local saver service is running:
+- Images are automatically saved to the target directory
+- Timestamped filenames prevent overwrites: `YYYYMMDD-HHMMSS-{concept}.webp`
+- Target: `/Users/peterblazsik/DevApps/O_S_v2/orthoscan-web/public/images`
+
+### Rate Limiting
+- VIP users: 30 requests/10min, 200/day (our limiter)
+- Google API Tier 1: 70 requests/day (Google's limit)
+
+## Testing
+
+```bash
+# Run tests in watch mode
+npm run test
+
+# Run tests once
+npm run test:run
+```
+
+Tests cover the ImageCard editable prompt feature:
+- Prompt expansion/collapse
+- Prompt modification detection
+- Reset functionality
+- Custom prompt submission
+
+## Known Issues
+
+- Google Imagen 4.0 safety filters block certain words ("teenage", age references)
+- Google API has a hard 70/day limit for Tier 1 accounts
+
+## Recent Changes (Jan 2025)
+
+1. Added editable prompt feature to ImageCard
+2. Updated all 29 prompts to:
+   - Remove safety-triggering age references
+   - Add ARTIN brand integration with theme-matching fonts
+3. Increased VIP rate limits to 200/day
+4. Set up Vitest test framework with 16 passing tests

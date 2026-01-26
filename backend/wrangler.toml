@@ -1,6 +1,13 @@
-name = "orthoscan-backend"
+name = "websyncer-api"
 main = "src/index.ts"
 compatibility_date = "2023-12-01"
 
 [vars]
 # MOCK_GEN_API_KEY = "xxx"
+# WHITELIST_IPS - set via `wrangler secret put WHITELIST_IPS` for production
+# Format: comma-separated IPs, e.g., "1.2.3.4,5.6.7.8"
+ 
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "03656df38ec34f899e306fd4a8d66753"
+preview_id = "5be64f01c5064a76a0e1fc64c8592768"
