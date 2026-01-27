@@ -63,7 +63,8 @@ export function Home() {
       {/* Hero Section */}
       <div className="text-center mb-16">
         <h1 className="text-5xl md:text-6xl font-bold text-white uppercase tracking-tight mb-4">
-          Web<span className="font-light">Syncer</span>
+          WEB
+          <span className="font-light text-[#fa642c]">SYNCER</span>
         </h1>
         <p className="text-xl text-brand-muted max-w-2xl mx-auto">
           Convert. Resize. Generate. Free.
