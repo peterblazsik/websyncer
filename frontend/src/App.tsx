@@ -7,6 +7,7 @@ import { Screenshots } from "./pages/Screenshots";
 import { IconGenerator } from "./pages/IconGenerator";
 import { BrandingGenerator } from "./pages/BrandingGenerator";
 import { HeicConverter } from "./pages/HeicConverter";
+import { BatchGenerator } from "./pages/BatchGenerator";
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
           <Route path="/icons" element={<IconGenerator />} />
           <Route path="/branding" element={<BrandingGenerator />} />
           <Route path="/heic" element={<HeicConverter />} />
+          <Route path="/batch" element={<BatchGenerator />} />
         </Routes>
       </div>
     </BrowserRouter>

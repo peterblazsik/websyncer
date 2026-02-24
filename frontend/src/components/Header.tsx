@@ -8,6 +8,7 @@ export const Header: React.FC = () => {
     { path: "/", label: "Home" },
     { path: "/marketing", label: "Marketing" },
     { path: "/branding", label: "Branding" },
+    { path: "/batch", label: "Batch" },
     { path: "/webp", label: "WebP" },
     { path: "/heic", label: "HEIC" },
     { path: "/screenshots", label: "Screenshots" },

@@ -13,7 +13,7 @@ When this skill is invoked, perform the following steps:
 
 ### Step 1: Start the Flask Server
 ```bash
-cd "/Users/peterblazsik/DevApps/png to webp" && python3 app.py
+cd "/Users/peterblazsik/DevApps/WebSyncer" && python3 app.py
 ```
 Run this in the background. The server runs on port 5001.
 

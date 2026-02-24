@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Sparkles, FileImage, Smartphone, Hexagon, Image } from "lucide-react";
+import { Sparkles, FileImage, Smartphone, Hexagon, Image, Layers } from "lucide-react";
 
 interface Tool {
   id: string;
@@ -54,6 +54,15 @@ const tools: Tool[] = [
     icon: Image,
     path: "/heic",
     badge: "Apple",
+  },
+  {
+    id: "batch",
+    title: "Batch Generator",
+    description:
+      "Generate multiple AI images at once using Gemini 3 Pro. Quick mode for rapid prompts or structured mode for fine control.",
+    icon: Layers,
+    path: "/batch",
+    badge: "AI Powered",
   },
 ];
 

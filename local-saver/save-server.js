@@ -35,16 +35,50 @@ const ALLOWED_ORIGINS = [
   "https://websyncer.pages.dev",
 ];
 
+// System paths that should never be written to (including their children)
+const BLOCKED_PATH_PREFIXES = [
+  "/System", "/Library", "/usr", "/bin", "/sbin",
+  "/var", "/private", "/etc",
+];
+
+// Custom target dirs must live under this user prefix
+const ALLOWED_USER_PREFIX = "/Users/peterblazsik/";
+
 /**
- * Validate that a path stays within TARGET_DIR (prevent path traversal)
+ * Validate that a path stays within a base directory (prevent path traversal)
  */
-function isPathSafe(outputPath) {
-  const resolvedTarget = path.resolve(TARGET_DIR);
-  const resolvedFull = path.resolve(TARGET_DIR, outputPath);
+function isPathSafe(outputPath, baseDir = TARGET_DIR) {
+  const resolvedTarget = path.resolve(baseDir);
+  const resolvedFull = path.resolve(baseDir, outputPath);
   return (
     resolvedFull.startsWith(resolvedTarget + path.sep) ||
     resolvedFull === resolvedTarget
   );
+}
+
+/**
+ * Validate that a custom target directory is safe to use.
+ * Must be an absolute path under the user's home directory,
+ * and not a system directory.
+ */
+function isTargetDirSafe(targetDir) {
+  if (!path.isAbsolute(targetDir)) return false;
+  const normalized = path.normalize(targetDir);
+
+  // Must not be root-level
+  if (normalized === "/" || normalized === "/Users") return false;
+
+  // Must live under the allowed user prefix
+  if (!normalized.startsWith(ALLOWED_USER_PREFIX)) return false;
+
+  // Block system directories and their children
+  for (const blocked of BLOCKED_PATH_PREFIXES) {
+    if (normalized === blocked || normalized.startsWith(blocked + path.sep)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 // Ensure directories exist
@@ -57,13 +91,13 @@ function ensureDir(filePath) {
 }
 
 // Save base64 image to file
-function saveImage(outputPath, base64Data) {
+function saveImage(outputPath, base64Data, baseDir = TARGET_DIR) {
   // Validate path to prevent directory traversal
-  if (!isPathSafe(outputPath)) {
+  if (!isPathSafe(outputPath, baseDir)) {
     throw new Error("Invalid path: path traversal not allowed");
   }
 
-  const fullPath = path.join(TARGET_DIR, outputPath);
+  const fullPath = path.join(baseDir, outputPath);
   ensureDir(fullPath);
 
   // Remove data URL prefix if present
@@ -92,14 +126,21 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "POST" && req.url === "/save") {
     let body = "";
+    const MAX_BODY_SIZE = 50 * 1024 * 1024; // 50MB
 
     req.on("data", (chunk) => {
       body += chunk.toString();
+      if (body.length > MAX_BODY_SIZE) {
+        res.writeHead(413);
+        res.end(JSON.stringify({ error: "Request body too large (max 50MB)" }));
+        req.destroy();
+        return;
+      }
     });
 
     req.on("end", () => {
       try {
-        const { outputPath, imageData } = JSON.parse(body);
+        const { outputPath, imageData, targetDir } = JSON.parse(body);
 
         if (!outputPath || !imageData) {
           res.writeHead(400);
@@ -107,7 +148,23 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        const savedPath = saveImage(outputPath, imageData);
+        // Determine the base directory
+        let baseDir = TARGET_DIR;
+        if (targetDir) {
+          if (!isTargetDirSafe(targetDir)) {
+            res.writeHead(400);
+            res.end(
+              JSON.stringify({
+                error:
+                  "Invalid target directory. Must be an absolute path and not a system directory.",
+              }),
+            );
+            return;
+          }
+          baseDir = targetDir;
+        }
+
+        const savedPath = saveImage(outputPath, imageData, baseDir);
         res.writeHead(200);
         res.end(JSON.stringify({ success: true, path: savedPath }));
       } catch (error) {
@@ -124,6 +181,7 @@ const server = http.createServer((req, res) => {
         status: "running",
         targetDir: TARGET_DIR,
         exists: fs.existsSync(TARGET_DIR),
+        supportsCustomTargetDir: true,
       }),
     );
   } else if (req.method === "POST" && req.url === "/update-manifest") {

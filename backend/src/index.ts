@@ -15,7 +15,7 @@ const RATE_LIMITS = {
     TTL: 660, // 11 minutes (buffer for edge cases)
   },
   DAILY: {
-    MAX_REQUESTS: 50,
+    MAX_REQUESTS: 70,
     TTL: 86400, // 24 hours
   },
 };
@@ -500,6 +500,226 @@ app.post("/api/branding/generate", async (c) => {
     throw new Error("No image data returned from API");
   } catch (error: any) {
     console.error("Branding generation failed:", error);
+    // Return generic error to client, full details logged server-side
+    return c.json(
+      {
+        success: false,
+        error: "Failed to generate image. Please try again.",
+      },
+      500,
+    );
+  }
+});
+
+// Batch generation endpoint - uses Gemini 3 Pro for flexible image generation
+app.post("/api/batch/generate", async (c) => {
+  try {
+    // Extract fingerprint components
+    const ip =
+      c.req.header("CF-Connecting-IP") ||
+      c.req.header("X-Forwarded-For")?.split(",")[0] ||
+      "unknown";
+    const userAgent = c.req.header("User-Agent") || "unknown";
+    const acceptLanguage = c.req.header("Accept-Language") || "unknown";
+    const acceptEncoding = c.req.header("Accept-Encoding") || "unknown";
+
+    // Create composite fingerprint
+    const fingerprint = await createFingerprint(
+      ip,
+      userAgent,
+      acceptLanguage,
+      acceptEncoding,
+    );
+    const limits = getRateLimits(ip, c.env);
+
+    // Get time buckets
+    const shortTermBucket = getShortTermBucket();
+    const dailyBucket = getDailyBucket();
+
+    // Rate limit keys
+    const shortTermKey = `rl:short:${fingerprint}:${shortTermBucket}`;
+    const dailyKey = `rl:daily:${fingerprint}:${dailyBucket}`;
+
+    // Check both rate limits in parallel
+    const [shortTermCount, dailyCount] = await Promise.all([
+      c.env.RATE_LIMIT.get(shortTermKey),
+      c.env.RATE_LIMIT.get(dailyKey),
+    ]);
+
+    const currentShortTerm = shortTermCount ? parseInt(shortTermCount) : 0;
+    const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
+
+    // Check short-term limit
+    if (currentShortTerm >= limits.SHORT_TERM.MAX_REQUESTS) {
+      const minutesIntoWindow = new Date().getUTCMinutes() % 10;
+      const secondsIntoWindow = new Date().getUTCSeconds();
+      const retryAfter = (10 - minutesIntoWindow) * 60 - secondsIntoWindow;
+
+      return c.json(
+        {
+          success: false,
+          error: `Too many requests. You can generate up to ${limits.SHORT_TERM.MAX_REQUESTS} images per ${limits.SHORT_TERM.WINDOW_MINUTES} minutes. Please wait a few minutes.`,
+          retryAfter: Math.max(retryAfter, 60),
+          limitType: "short_term",
+        },
+        429,
+      );
+    }
+
+    // Check daily limit
+    if (currentDaily >= limits.DAILY.MAX_REQUESTS) {
+      const now = new Date();
+      const endOfDay = new Date(now);
+      endOfDay.setUTCHours(24, 0, 0, 0);
+      const retryAfter = Math.floor(
+        (endOfDay.getTime() - now.getTime()) / 1000,
+      );
+
+      return c.json(
+        {
+          success: false,
+          error: `Daily limit reached. You can generate up to ${limits.DAILY.MAX_REQUESTS} images per day. Try again tomorrow!`,
+          retryAfter,
+          limitType: "daily",
+        },
+        429,
+      );
+    }
+
+    // Increment counters (fire-and-forget to avoid blocking)
+    Promise.all([
+      c.env.RATE_LIMIT.put(shortTermKey, (currentShortTerm + 1).toString(), {
+        expirationTtl: limits.SHORT_TERM.TTL,
+      }),
+      c.env.RATE_LIMIT.put(dailyKey, (currentDaily + 1).toString(), {
+        expirationTtl: limits.DAILY.TTL,
+      }),
+    ]).catch((err) => {
+      console.error("Failed to update rate limit counters:", err);
+    });
+
+    const body = await c.req.json();
+    const { prompt } = body;
+
+    if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
+      return c.json(
+        { success: false, error: "Prompt must be a non-empty string" },
+        400,
+      );
+    }
+
+    if (prompt.length > 10000) {
+      return c.json(
+        { success: false, error: "Prompt is too long (max 10000 characters)" },
+        400,
+      );
+    }
+
+    const apiKey = c.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return c.json({ success: false, error: "API configuration error" }, 500);
+    }
+
+    // Call Gemini 3 Pro Image model via generateContent endpoint
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+          },
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = `Gemini 3 Pro API error: ${response.status}`;
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.error?.message) {
+          errorMessage = errorJson.error.message;
+        }
+      } catch {
+        // JSON parse failed, use generic message
+      }
+      console.error("Gemini 3 Pro API error:", errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = (await response.json()) as any;
+
+    // Extract image from Gemini 3 Pro response
+    const candidates = data.candidates;
+    if (!candidates || candidates.length === 0) {
+      throw new Error("No response from Gemini 3 Pro");
+    }
+
+    const parts = candidates[0]?.content?.parts;
+    if (!parts || parts.length === 0) {
+      // Check if blocked by safety
+      const blockReason = candidates[0]?.finishReason;
+      if (blockReason === "SAFETY") {
+        return c.json(
+          {
+            success: false,
+            error:
+              "This image couldn't be generated due to content restrictions. Please try a different prompt.",
+          },
+          400,
+        );
+      }
+      throw new Error("No content in Gemini 3 Pro response");
+    }
+
+    // Find the image part (inlineData with mimeType starting with "image/")
+    const imagePart = parts.find(
+      (part: { inlineData?: { mimeType?: string; data?: string } }) =>
+        part.inlineData?.mimeType?.startsWith("image/"),
+    );
+
+    if (!imagePart?.inlineData?.data) {
+      // Check if blocked by safety
+      const blockReason = candidates[0]?.finishReason;
+      if (blockReason === "SAFETY") {
+        return c.json(
+          {
+            success: false,
+            error:
+              "This image couldn't be generated due to content restrictions. Please try a different prompt.",
+          },
+          400,
+        );
+      }
+      throw new Error("No image generated by Gemini 3 Pro");
+    }
+
+    const mimeType = imagePart.inlineData.mimeType;
+    const base64Image = imagePart.inlineData.data;
+    const imageUrl = `data:${mimeType};base64,${base64Image}`;
+
+    return c.json({
+      success: true,
+      imageUrl: imageUrl,
+      mimeType: mimeType,
+      rateLimit: {
+        shortTermRemaining:
+          limits.SHORT_TERM.MAX_REQUESTS - currentShortTerm - 1,
+        dailyRemaining: limits.DAILY.MAX_REQUESTS - currentDaily - 1,
+      },
+    });
+  } catch (error: any) {
+    console.error("Batch generation failed:", error);
     // Return generic error to client, full details logged server-side
     return c.json(
       {
