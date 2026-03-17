@@ -1,5 +1,14 @@
 import { Link } from "react-router-dom";
-import { Sparkles, FileImage, Smartphone, Hexagon, Image, Layers } from "lucide-react";
+import {
+  Sparkles,
+  FileImage,
+  Smartphone,
+  Hexagon,
+  Image,
+  Layers,
+  Palette,
+  PenTool,
+} from "lucide-react";
 
 interface Tool {
   id: string;
@@ -18,6 +27,15 @@ const tools: Tool[] = [
       "AI-powered image generation for marketing campaigns. Create professional assets with custom branding.",
     icon: Sparkles,
     path: "/marketing",
+    badge: "AI Powered",
+  },
+  {
+    id: "branding",
+    title: "Branding Generator",
+    description:
+      "29 pre-configured premium image prompts across 5 categories. Generate complete brand asset libraries with one click.",
+    icon: Palette,
+    path: "/branding",
     badge: "AI Powered",
   },
   {
@@ -63,6 +81,15 @@ const tools: Tool[] = [
     icon: Layers,
     path: "/batch",
     badge: "AI Powered",
+  },
+  {
+    id: "vectorize",
+    title: "Image Vectorizer",
+    description:
+      "Convert raster images (PNG, JPG, WebP) to clean SVG vector graphics. B&W, multi-color, and edge detection modes with live preview.",
+    icon: PenTool,
+    path: "/vectorize",
+    badge: "New",
   },
 ];
 
@@ -120,7 +147,13 @@ export function Home() {
       {/* Footer Info */}
       <div className="text-center mt-16 text-brand-muted text-sm">
         <p>All processing runs locally in your browser. No uploads required.</p>
-        <p className="mt-1">Free and open source.</p>
+        <p className="mt-2">
+          Press{" "}
+          <kbd className="px-1.5 py-0.5 bg-brand-card border border-brand-border rounded text-xs text-white font-mono">
+            ?
+          </kbd>{" "}
+          for keyboard shortcuts
+        </p>
       </div>
     </main>
   );

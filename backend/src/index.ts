@@ -22,7 +22,7 @@ const RATE_LIMITS = {
 
 // Whitelisted IPs with higher limits - loaded from environment variable
 // Set WHITELIST_IPS in wrangler.toml or .dev.vars as comma-separated values
-// e.g., WHITELIST_IPS=24.132.177.218,2001:1c08:70e:bb00:ad06:f5c5:ab2e:6dda
+// e.g., WHITELIST_IPS=<ipv4>,<ipv6>
 function getWhitelistIPs(env: { WHITELIST_IPS?: string }): string[] {
   if (!env.WHITELIST_IPS) return [];
   return env.WHITELIST_IPS.split(",")
@@ -54,31 +54,18 @@ function getRateLimits(ip: string, env: { WHITELIST_IPS?: string }) {
 }
 
 /**
- * Check if IP is whitelisted
+ * Creates IP-based fingerprint for rate limiting.
+ * Uses IP only — other headers are trivially spoofable.
  */
-function isWhitelisted(ip: string, env: { WHITELIST_IPS?: string }): boolean {
-  return getWhitelistIPs(env).includes(ip);
-}
-
-/**
- * Creates a composite fingerprint from request headers.
- * Combines multiple signals to make bypass harder than IP-only.
- */
-async function createFingerprint(
-  ip: string,
-  userAgent: string,
-  acceptLanguage: string,
-  acceptEncoding: string,
-): Promise<string> {
-  const data = `${ip}|${userAgent}|${acceptLanguage}|${acceptEncoding}`;
+async function createFingerprint(ip: string): Promise<string> {
   const encoder = new TextEncoder();
-  const dataBuffer = encoder.encode(data);
+  const dataBuffer = encoder.encode(ip);
   const hashBuffer = await crypto.subtle.digest("SHA-256", dataBuffer);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return hashHex.slice(0, 16); // Use first 16 chars for shorter keys
+  return hashHex.slice(0, 16);
 }
 
 /**
@@ -103,26 +90,137 @@ function getDailyBucket(): string {
   return new Date().toISOString().split("T")[0];
 }
 
+/**
+ * Extract client IP from Cloudflare headers.
+ * CF-Connecting-IP is always set by Cloudflare and cannot be spoofed.
+ * Returns null if no trustworthy IP is available.
+ */
+function getClientIp(c: {
+  req: { header: (name: string) => string | undefined };
+}): string | null {
+  return c.req.header("CF-Connecting-IP") || null;
+}
+
+/**
+ * Max allowed request body size in characters (approx bytes for ASCII/UTF-8)
+ */
+const MAX_BODY_SIZE = 50_000; // 50KB
+
+/**
+ * Max prompt length for any endpoint
+ */
+const MAX_PROMPT_LENGTH = 10_000;
+
+/**
+ * Rate limit check + increment. Awaits counter writes to prevent race conditions.
+ * Returns null if allowed, or an error response if rate limited.
+ */
+async function checkAndIncrementRateLimit(
+  ip: string,
+  env: Bindings,
+): Promise<
+  | { error: true; response: Response }
+  | {
+      error: false;
+      limits: typeof RATE_LIMITS;
+      currentShortTerm: number;
+      currentDaily: number;
+    }
+> {
+  const fingerprint = await createFingerprint(ip);
+  const limits = getRateLimits(ip, env);
+
+  const shortTermBucket = getShortTermBucket();
+  const dailyBucket = getDailyBucket();
+
+  const shortTermKey = `rl:short:${fingerprint}:${shortTermBucket}`;
+  const dailyKey = `rl:daily:${fingerprint}:${dailyBucket}`;
+
+  // Check both rate limits in parallel
+  const [shortTermCount, dailyCount] = await Promise.all([
+    env.RATE_LIMIT.get(shortTermKey),
+    env.RATE_LIMIT.get(dailyKey),
+  ]);
+
+  const currentShortTerm = shortTermCount ? parseInt(shortTermCount) : 0;
+  const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
+
+  // Check short-term limit
+  if (currentShortTerm >= limits.SHORT_TERM.MAX_REQUESTS) {
+    const minutesIntoWindow = new Date().getUTCMinutes() % 10;
+    const secondsIntoWindow = new Date().getUTCSeconds();
+    const retryAfter = (10 - minutesIntoWindow) * 60 - secondsIntoWindow;
+
+    return {
+      error: true,
+      response: new Response(
+        JSON.stringify({
+          success: false,
+          error: `Too many requests. You can generate up to ${limits.SHORT_TERM.MAX_REQUESTS} images per ${limits.SHORT_TERM.WINDOW_MINUTES} minutes. Please wait a few minutes.`,
+          retryAfter: Math.max(retryAfter, 60),
+          limitType: "short_term",
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      ),
+    };
+  }
+
+  // Check daily limit
+  if (currentDaily >= limits.DAILY.MAX_REQUESTS) {
+    const now = new Date();
+    const endOfDay = new Date(now);
+    endOfDay.setUTCHours(24, 0, 0, 0);
+    const retryAfter = Math.floor((endOfDay.getTime() - now.getTime()) / 1000);
+
+    return {
+      error: true,
+      response: new Response(
+        JSON.stringify({
+          success: false,
+          error: `Daily limit reached. You can generate up to ${limits.DAILY.MAX_REQUESTS} images per day. Try again tomorrow!`,
+          retryAfter,
+          limitType: "daily",
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      ),
+    };
+  }
+
+  // Increment counters — await to prevent race condition
+  await Promise.all([
+    env.RATE_LIMIT.put(shortTermKey, (currentShortTerm + 1).toString(), {
+      expirationTtl: limits.SHORT_TERM.TTL,
+    }),
+    env.RATE_LIMIT.put(dailyKey, (currentDaily + 1).toString(), {
+      expirationTtl: limits.DAILY.TTL,
+    }),
+  ]);
+
+  return { error: false, limits, currentShortTerm, currentDaily };
+}
+
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.use("/*", cors());
+// Restrict CORS to actual origins
+app.use(
+  "/*",
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "https://websyncer.pages.dev",
+    ],
+  }),
+);
 
 // Rate limit status endpoint - check limits without consuming a request
 app.get("/api/rate-limit-status", async (c) => {
-  const ip =
-    c.req.header("CF-Connecting-IP") ||
-    c.req.header("X-Forwarded-For")?.split(",")[0] ||
-    "unknown";
-  const userAgent = c.req.header("User-Agent") || "unknown";
-  const acceptLanguage = c.req.header("Accept-Language") || "unknown";
-  const acceptEncoding = c.req.header("Accept-Encoding") || "unknown";
+  const ip = getClientIp(c);
+  if (!ip) {
+    return c.json({ error: "Unable to identify client" }, 400);
+  }
 
-  const fingerprint = await createFingerprint(
-    ip,
-    userAgent,
-    acceptLanguage,
-    acceptEncoding,
-  );
+  const fingerprint = await createFingerprint(ip);
   const limits = getRateLimits(ip, c.env);
 
   const shortTermBucket = getShortTermBucket();
@@ -143,99 +241,67 @@ app.get("/api/rate-limit-status", async (c) => {
       used: dailyCount ? parseInt(dailyCount) : 0,
       limit: limits.DAILY.MAX_REQUESTS,
     },
-    whitelisted: isWhitelisted(ip, c.env),
-    clientIp: ip, // Debug: show what IP we're seeing
   });
 });
 
 app.post("/api/generate", async (c) => {
   try {
-    // Extract fingerprint components
-    const ip =
-      c.req.header("CF-Connecting-IP") ||
-      c.req.header("X-Forwarded-For")?.split(",")[0] ||
-      "unknown";
-    const userAgent = c.req.header("User-Agent") || "unknown";
-    const acceptLanguage = c.req.header("Accept-Language") || "unknown";
-    const acceptEncoding = c.req.header("Accept-Encoding") || "unknown";
-
-    // Create composite fingerprint
-    const fingerprint = await createFingerprint(
-      ip,
-      userAgent,
-      acceptLanguage,
-      acceptEncoding,
-    );
-    const limits = getRateLimits(ip, c.env);
-
-    // Get time buckets
-    const shortTermBucket = getShortTermBucket();
-    const dailyBucket = getDailyBucket();
-
-    // Rate limit keys
-    const shortTermKey = `rl:short:${fingerprint}:${shortTermBucket}`;
-    const dailyKey = `rl:daily:${fingerprint}:${dailyBucket}`;
-
-    // Check both rate limits in parallel
-    const [shortTermCount, dailyCount] = await Promise.all([
-      c.env.RATE_LIMIT.get(shortTermKey),
-      c.env.RATE_LIMIT.get(dailyKey),
-    ]);
-
-    const currentShortTerm = shortTermCount ? parseInt(shortTermCount) : 0;
-    const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
-
-    // Check short-term limit
-    if (currentShortTerm >= limits.SHORT_TERM.MAX_REQUESTS) {
-      const minutesIntoWindow = new Date().getUTCMinutes() % 10;
-      const secondsIntoWindow = new Date().getUTCSeconds();
-      const retryAfter = (10 - minutesIntoWindow) * 60 - secondsIntoWindow;
-
+    const ip = getClientIp(c);
+    if (!ip) {
       return c.json(
-        {
-          success: false,
-          error: `Too many requests. You can generate up to ${limits.SHORT_TERM.MAX_REQUESTS} images per ${limits.SHORT_TERM.WINDOW_MINUTES} minutes. Please wait a few minutes.`,
-          retryAfter: Math.max(retryAfter, 60),
-          limitType: "short_term",
-        },
-        429,
+        { success: false, error: "Unable to identify client" },
+        400,
       );
     }
 
-    // Check daily limit
-    if (currentDaily >= limits.DAILY.MAX_REQUESTS) {
-      const now = new Date();
-      const endOfDay = new Date(now);
-      endOfDay.setUTCHours(24, 0, 0, 0);
-      const retryAfter = Math.floor(
-        (endOfDay.getTime() - now.getTime()) / 1000,
-      );
+    // Rate limit check
+    const rateCheck = await checkAndIncrementRateLimit(ip, c.env);
+    if (rateCheck.error) return rateCheck.response;
+    const { limits, currentShortTerm, currentDaily } = rateCheck;
 
-      return c.json(
-        {
-          success: false,
-          error: `Daily limit reached. You can generate up to ${limits.DAILY.MAX_REQUESTS} images per day. Try again tomorrow!`,
-          retryAfter,
-          limitType: "daily",
-        },
-        429,
-      );
+    // Body size check
+    const contentLength = c.req.header("Content-Length");
+    if (contentLength && parseInt(contentLength) > MAX_BODY_SIZE) {
+      return c.json({ success: false, error: "Request body too large" }, 413);
     }
-
-    // Increment counters (fire-and-forget to avoid blocking)
-    Promise.all([
-      c.env.RATE_LIMIT.put(shortTermKey, (currentShortTerm + 1).toString(), {
-        expirationTtl: limits.SHORT_TERM.TTL,
-      }),
-      c.env.RATE_LIMIT.put(dailyKey, (currentDaily + 1).toString(), {
-        expirationTtl: limits.DAILY.TTL,
-      }),
-    ]).catch((err) => {
-      console.error("Failed to update rate limit counters:", err);
-    });
 
     const body = await c.req.json();
     const { person, foreground, background, branding } = body;
+
+    // Input validation
+    if (!person || !foreground || !background || !branding) {
+      return c.json({ success: false, error: "Missing required fields" }, 400);
+    }
+
+    // Validate string field lengths
+    const allFields = [
+      person.mainCharacter,
+      person.clothingColor,
+      person.action,
+      foreground.customText,
+      foreground.color,
+      foreground.imageType,
+      foreground.measurement,
+      background.sloganLocation,
+      background.sloganLanguage,
+      background.wallText,
+      background.mood,
+      background.motivationalText,
+      background.sloganProduct,
+      branding.logoText,
+      branding.logoTextColor,
+      branding.logoBgColor,
+      branding.logoBorderColor,
+      branding.instagramContact,
+    ];
+    for (const field of allFields) {
+      if (typeof field === "string" && field.length > 500) {
+        return c.json(
+          { success: false, error: "Field value too long (max 500 chars)" },
+          400,
+        );
+      }
+    }
 
     const prompt = `
 Ultra Professional fitness shoe INSOLE photography - hyper personalised custom orthopedic inserts.
@@ -323,7 +389,6 @@ Style: High-quality lifestyle fitness photography, bright natural lighting, 1080
     throw new Error("No image data returned from API");
   } catch (error: any) {
     console.error("Generation failed:", error);
-    // Return generic error to client, full details logged server-side
     return c.json(
       {
         success: false,
@@ -337,95 +402,40 @@ Style: High-quality lifestyle fitness photography, bright natural lighting, 1080
 // Branding generation endpoint - uses pre-configured prompts from frontend
 app.post("/api/branding/generate", async (c) => {
   try {
-    // Extract fingerprint components
-    const ip =
-      c.req.header("CF-Connecting-IP") ||
-      c.req.header("X-Forwarded-For")?.split(",")[0] ||
-      "unknown";
-    const userAgent = c.req.header("User-Agent") || "unknown";
-    const acceptLanguage = c.req.header("Accept-Language") || "unknown";
-    const acceptEncoding = c.req.header("Accept-Encoding") || "unknown";
-
-    // Create composite fingerprint
-    const fingerprint = await createFingerprint(
-      ip,
-      userAgent,
-      acceptLanguage,
-      acceptEncoding,
-    );
-    const limits = getRateLimits(ip, c.env);
-
-    // Get time buckets
-    const shortTermBucket = getShortTermBucket();
-    const dailyBucket = getDailyBucket();
-
-    // Rate limit keys
-    const shortTermKey = `rl:short:${fingerprint}:${shortTermBucket}`;
-    const dailyKey = `rl:daily:${fingerprint}:${dailyBucket}`;
-
-    // Check both rate limits in parallel
-    const [shortTermCount, dailyCount] = await Promise.all([
-      c.env.RATE_LIMIT.get(shortTermKey),
-      c.env.RATE_LIMIT.get(dailyKey),
-    ]);
-
-    const currentShortTerm = shortTermCount ? parseInt(shortTermCount) : 0;
-    const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
-
-    // Check short-term limit
-    if (currentShortTerm >= limits.SHORT_TERM.MAX_REQUESTS) {
-      const minutesIntoWindow = new Date().getUTCMinutes() % 10;
-      const secondsIntoWindow = new Date().getUTCSeconds();
-      const retryAfter = (10 - minutesIntoWindow) * 60 - secondsIntoWindow;
-
+    const ip = getClientIp(c);
+    if (!ip) {
       return c.json(
-        {
-          success: false,
-          error: `Too many requests. You can generate up to ${limits.SHORT_TERM.MAX_REQUESTS} images per ${limits.SHORT_TERM.WINDOW_MINUTES} minutes. Please wait a few minutes.`,
-          retryAfter: Math.max(retryAfter, 60),
-          limitType: "short_term",
-        },
-        429,
+        { success: false, error: "Unable to identify client" },
+        400,
       );
     }
 
-    // Check daily limit
-    if (currentDaily >= limits.DAILY.MAX_REQUESTS) {
-      const now = new Date();
-      const endOfDay = new Date(now);
-      endOfDay.setUTCHours(24, 0, 0, 0);
-      const retryAfter = Math.floor(
-        (endOfDay.getTime() - now.getTime()) / 1000,
-      );
+    // Rate limit check
+    const rateCheck = await checkAndIncrementRateLimit(ip, c.env);
+    if (rateCheck.error) return rateCheck.response;
+    const { limits, currentShortTerm, currentDaily } = rateCheck;
 
-      return c.json(
-        {
-          success: false,
-          error: `Daily limit reached. You can generate up to ${limits.DAILY.MAX_REQUESTS} images per day. Try again tomorrow!`,
-          retryAfter,
-          limitType: "daily",
-        },
-        429,
-      );
+    // Body size check
+    const contentLength = c.req.header("Content-Length");
+    if (contentLength && parseInt(contentLength) > MAX_BODY_SIZE) {
+      return c.json({ success: false, error: "Request body too large" }, 413);
     }
-
-    // Increment counters (fire-and-forget to avoid blocking)
-    Promise.all([
-      c.env.RATE_LIMIT.put(shortTermKey, (currentShortTerm + 1).toString(), {
-        expirationTtl: limits.SHORT_TERM.TTL,
-      }),
-      c.env.RATE_LIMIT.put(dailyKey, (currentDaily + 1).toString(), {
-        expirationTtl: limits.DAILY.TTL,
-      }),
-    ]).catch((err) => {
-      console.error("Failed to update rate limit counters:", err);
-    });
 
     const body = await c.req.json();
-    const { prompt, negativePrompt, aspectRatio } = body;
+    const { prompt, aspectRatio } = body;
 
-    if (!prompt) {
+    if (!prompt || typeof prompt !== "string") {
       return c.json({ success: false, error: "Prompt is required" }, 400);
+    }
+
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return c.json(
+        {
+          success: false,
+          error: `Prompt too long (max ${MAX_PROMPT_LENGTH} chars)`,
+        },
+        400,
+      );
     }
 
     const apiKey = c.env.GEMINI_API_KEY;
@@ -439,9 +449,7 @@ app.post("/api/branding/generate", async (c) => {
       ? aspectRatio
       : "1:1";
 
-    // Build request parameters
-    // Note: negativePrompt is no longer supported by Imagen 4.0 as of Jan 2025
-    const requestParams: any = {
+    const requestParams = {
       instances: [{ prompt }],
       parameters: {
         sampleCount: 1,
@@ -470,7 +478,6 @@ app.post("/api/branding/generate", async (c) => {
 
     const data = (await response.json()) as any;
 
-    // Response format: { predictions: [ { bytesBase64Encoded: "..." } ] }
     if (
       data.predictions &&
       data.predictions.length > 0 &&
@@ -500,7 +507,6 @@ app.post("/api/branding/generate", async (c) => {
     throw new Error("No image data returned from API");
   } catch (error: any) {
     console.error("Branding generation failed:", error);
-    // Return generic error to client, full details logged server-side
     return c.json(
       {
         success: false,
@@ -514,89 +520,24 @@ app.post("/api/branding/generate", async (c) => {
 // Batch generation endpoint - uses Gemini 3 Pro for flexible image generation
 app.post("/api/batch/generate", async (c) => {
   try {
-    // Extract fingerprint components
-    const ip =
-      c.req.header("CF-Connecting-IP") ||
-      c.req.header("X-Forwarded-For")?.split(",")[0] ||
-      "unknown";
-    const userAgent = c.req.header("User-Agent") || "unknown";
-    const acceptLanguage = c.req.header("Accept-Language") || "unknown";
-    const acceptEncoding = c.req.header("Accept-Encoding") || "unknown";
-
-    // Create composite fingerprint
-    const fingerprint = await createFingerprint(
-      ip,
-      userAgent,
-      acceptLanguage,
-      acceptEncoding,
-    );
-    const limits = getRateLimits(ip, c.env);
-
-    // Get time buckets
-    const shortTermBucket = getShortTermBucket();
-    const dailyBucket = getDailyBucket();
-
-    // Rate limit keys
-    const shortTermKey = `rl:short:${fingerprint}:${shortTermBucket}`;
-    const dailyKey = `rl:daily:${fingerprint}:${dailyBucket}`;
-
-    // Check both rate limits in parallel
-    const [shortTermCount, dailyCount] = await Promise.all([
-      c.env.RATE_LIMIT.get(shortTermKey),
-      c.env.RATE_LIMIT.get(dailyKey),
-    ]);
-
-    const currentShortTerm = shortTermCount ? parseInt(shortTermCount) : 0;
-    const currentDaily = dailyCount ? parseInt(dailyCount) : 0;
-
-    // Check short-term limit
-    if (currentShortTerm >= limits.SHORT_TERM.MAX_REQUESTS) {
-      const minutesIntoWindow = new Date().getUTCMinutes() % 10;
-      const secondsIntoWindow = new Date().getUTCSeconds();
-      const retryAfter = (10 - minutesIntoWindow) * 60 - secondsIntoWindow;
-
+    const ip = getClientIp(c);
+    if (!ip) {
       return c.json(
-        {
-          success: false,
-          error: `Too many requests. You can generate up to ${limits.SHORT_TERM.MAX_REQUESTS} images per ${limits.SHORT_TERM.WINDOW_MINUTES} minutes. Please wait a few minutes.`,
-          retryAfter: Math.max(retryAfter, 60),
-          limitType: "short_term",
-        },
-        429,
+        { success: false, error: "Unable to identify client" },
+        400,
       );
     }
 
-    // Check daily limit
-    if (currentDaily >= limits.DAILY.MAX_REQUESTS) {
-      const now = new Date();
-      const endOfDay = new Date(now);
-      endOfDay.setUTCHours(24, 0, 0, 0);
-      const retryAfter = Math.floor(
-        (endOfDay.getTime() - now.getTime()) / 1000,
-      );
+    // Rate limit check
+    const rateCheck = await checkAndIncrementRateLimit(ip, c.env);
+    if (rateCheck.error) return rateCheck.response;
+    const { limits, currentShortTerm, currentDaily } = rateCheck;
 
-      return c.json(
-        {
-          success: false,
-          error: `Daily limit reached. You can generate up to ${limits.DAILY.MAX_REQUESTS} images per day. Try again tomorrow!`,
-          retryAfter,
-          limitType: "daily",
-        },
-        429,
-      );
+    // Body size check
+    const contentLength = c.req.header("Content-Length");
+    if (contentLength && parseInt(contentLength) > MAX_BODY_SIZE) {
+      return c.json({ success: false, error: "Request body too large" }, 413);
     }
-
-    // Increment counters (fire-and-forget to avoid blocking)
-    Promise.all([
-      c.env.RATE_LIMIT.put(shortTermKey, (currentShortTerm + 1).toString(), {
-        expirationTtl: limits.SHORT_TERM.TTL,
-      }),
-      c.env.RATE_LIMIT.put(dailyKey, (currentDaily + 1).toString(), {
-        expirationTtl: limits.DAILY.TTL,
-      }),
-    ]).catch((err) => {
-      console.error("Failed to update rate limit counters:", err);
-    });
 
     const body = await c.req.json();
     const { prompt } = body;
@@ -608,9 +549,12 @@ app.post("/api/batch/generate", async (c) => {
       );
     }
 
-    if (prompt.length > 10000) {
+    if (prompt.length > MAX_PROMPT_LENGTH) {
       return c.json(
-        { success: false, error: "Prompt is too long (max 10000 characters)" },
+        {
+          success: false,
+          error: `Prompt is too long (max ${MAX_PROMPT_LENGTH} characters)`,
+        },
         400,
       );
     }
@@ -667,7 +611,6 @@ app.post("/api/batch/generate", async (c) => {
 
     const parts = candidates[0]?.content?.parts;
     if (!parts || parts.length === 0) {
-      // Check if blocked by safety
       const blockReason = candidates[0]?.finishReason;
       if (blockReason === "SAFETY") {
         return c.json(
@@ -689,7 +632,6 @@ app.post("/api/batch/generate", async (c) => {
     );
 
     if (!imagePart?.inlineData?.data) {
-      // Check if blocked by safety
       const blockReason = candidates[0]?.finishReason;
       if (blockReason === "SAFETY") {
         return c.json(
@@ -720,7 +662,6 @@ app.post("/api/batch/generate", async (c) => {
     });
   } catch (error: any) {
     console.error("Batch generation failed:", error);
-    // Return generic error to client, full details logged server-side
     return c.json(
       {
         success: false,

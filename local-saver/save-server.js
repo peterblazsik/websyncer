@@ -15,7 +15,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 
 // Target directory for images
 const TARGET_DIR =
@@ -37,8 +37,14 @@ const ALLOWED_ORIGINS = [
 
 // System paths that should never be written to (including their children)
 const BLOCKED_PATH_PREFIXES = [
-  "/System", "/Library", "/usr", "/bin", "/sbin",
-  "/var", "/private", "/etc",
+  "/System",
+  "/Library",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/var",
+  "/private",
+  "/etc",
 ];
 
 // Custom target dirs must live under this user prefix
@@ -199,8 +205,9 @@ const server = http.createServer((req, res) => {
     }
 
     console.log("📋 Updating image manifest...");
-    exec(
-      `node "${scriptPath}"`,
+    execFile(
+      "node",
+      [scriptPath],
       { cwd: ORTHOSCAN_WEB_DIR },
       (error, stdout, stderr) => {
         if (error) {

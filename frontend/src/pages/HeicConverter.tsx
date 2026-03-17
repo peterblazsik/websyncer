@@ -13,6 +13,7 @@ import {
   type ProcessedImage,
 } from "../lib/downloadHelpers";
 import { convertHeicToBlob, validateHeicFile } from "../lib/heicProcessing";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { X, FileImage, Check } from "lucide-react";
 
 type OutputFormat = "jpeg" | "png";
@@ -20,11 +21,17 @@ type ResizeMode = "original" | "custom";
 
 export function HeicConverter() {
   const [files, setFiles] = useState<File[]>([]);
-  const [outputFormat, setOutputFormat] = useState<OutputFormat>("jpeg");
-  const [quality, setQuality] = useState(92);
-  const [resizeMode, setResizeMode] = useState<ResizeMode>("original");
-  const [maxWidth, setMaxWidth] = useState(1920);
-  const [maxHeight, setMaxHeight] = useState(1080);
+  const [outputFormat, setOutputFormat] = usePersistedState<OutputFormat>(
+    "heic-output-format",
+    "jpeg",
+  );
+  const [quality, setQuality] = usePersistedState("heic-quality", 92);
+  const [resizeMode, setResizeMode] = usePersistedState<ResizeMode>(
+    "heic-resize-mode",
+    "original",
+  );
+  const [maxWidth, setMaxWidth] = usePersistedState("heic-max-width", 1920);
+  const [maxHeight, setMaxHeight] = usePersistedState("heic-max-height", 1080);
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState({
     current: 0,
