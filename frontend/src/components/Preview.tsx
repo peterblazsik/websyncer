@@ -46,8 +46,13 @@ export const Preview: React.FC<PreviewProps> = ({
               </button>
             </>
           ) : (
-            <div className="text-brand-muted text-center p-8">
-              <p className="text-sm">Preview will appear here</p>
+            <div className="relative text-brand-muted text-center p-8 flex flex-col items-center justify-center">
+              <img
+                src="/assets/generated/empty-generate.jpg"
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover opacity-10 pointer-events-none"
+              />
+              <p className="text-sm relative z-10">Preview will appear here</p>
             </div>
           )}
         </div>

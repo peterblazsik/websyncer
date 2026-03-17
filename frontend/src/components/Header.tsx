@@ -17,6 +17,7 @@ export const Header: React.FC = () => {
     { path: "/screenshots", label: "Screenshots" },
     { path: "/icons", label: "Icons" },
     { path: "/vectorize", label: "Vectorize" },
+    { path: "/pipeline", label: "Pipeline" },
   ];
 
   // Close menu on route change

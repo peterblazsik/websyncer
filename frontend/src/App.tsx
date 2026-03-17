@@ -15,6 +15,7 @@ import { BrandingGenerator } from "./pages/BrandingGenerator";
 import { HeicConverter } from "./pages/HeicConverter";
 import { BatchGenerator } from "./pages/BatchGenerator";
 import { Vectorize } from "./pages/Vectorize";
+import { Pipeline } from "./pages/Pipeline";
 
 function AppContent() {
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -42,7 +43,7 @@ function AppContent() {
     <div className="min-h-screen bg-brand-light font-sans text-brand-text">
       <Toaster
         theme="dark"
-        position="bottom-right"
+        position="top-right"
         toastOptions={{
           style: {
             background: "#1a1a1a",
@@ -64,6 +65,7 @@ function AppContent() {
         <Route path="/heic" element={<HeicConverter />} />
         <Route path="/batch" element={<BatchGenerator />} />
         <Route path="/vectorize" element={<Vectorize />} />
+        <Route path="/pipeline" element={<Pipeline />} />
       </Routes>
 
       <HistoryPanel entries={historyEntries} onClear={clearHistory} />

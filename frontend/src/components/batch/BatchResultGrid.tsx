@@ -28,9 +28,14 @@ export const BatchResultGrid: React.FC<BatchResultGridProps> = ({
   const hasResults = items.some((item) => item.status !== "pending");
   if (!hasResults) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
-        <Layers className="w-10 h-10 text-brand-muted/30 mb-3" />
-        <p className="text-sm text-brand-muted">
+      <div className="relative flex flex-col items-center justify-center py-12 text-center overflow-hidden rounded-xl">
+        <img
+          src="/assets/generated/empty-generate.jpg"
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover opacity-[0.07] pointer-events-none"
+        />
+        <Layers className="w-10 h-10 text-brand-muted/30 mb-3 relative z-10" />
+        <p className="text-sm text-brand-muted relative z-10">
           Results will appear here after generation
         </p>
       </div>

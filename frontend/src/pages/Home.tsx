@@ -8,6 +8,7 @@ import {
   Layers,
   Palette,
   PenTool,
+  Workflow,
 } from "lucide-react";
 
 interface Tool {
@@ -17,6 +18,7 @@ interface Tool {
   icon: React.ComponentType<{ className?: string }>;
   path: string;
   badge?: string;
+  image: string;
 }
 
 const tools: Tool[] = [
@@ -28,6 +30,7 @@ const tools: Tool[] = [
     icon: Sparkles,
     path: "/marketing",
     badge: "AI Powered",
+    image: "/assets/generated/tool-marketing.jpg",
   },
   {
     id: "branding",
@@ -37,6 +40,7 @@ const tools: Tool[] = [
     icon: Palette,
     path: "/branding",
     badge: "AI Powered",
+    image: "/assets/generated/tool-branding.jpg",
   },
   {
     id: "webp",
@@ -45,6 +49,7 @@ const tools: Tool[] = [
       "Convert PNG images to optimized WebP format with multiple size variants for web and mobile.",
     icon: FileImage,
     path: "/webp",
+    image: "/assets/generated/tool-webp.jpg",
   },
   {
     id: "screenshots",
@@ -54,6 +59,7 @@ const tools: Tool[] = [
     icon: Smartphone,
     path: "/screenshots",
     badge: "iOS",
+    image: "/assets/generated/tool-screenshots.jpg",
   },
   {
     id: "icons",
@@ -63,6 +69,7 @@ const tools: Tool[] = [
     icon: Hexagon,
     path: "/icons",
     badge: "iOS",
+    image: "/assets/generated/tool-icons.jpg",
   },
   {
     id: "heic",
@@ -72,6 +79,7 @@ const tools: Tool[] = [
     icon: Image,
     path: "/heic",
     badge: "Apple",
+    image: "/assets/generated/tool-heic.jpg",
   },
   {
     id: "batch",
@@ -81,6 +89,7 @@ const tools: Tool[] = [
     icon: Layers,
     path: "/batch",
     badge: "AI Powered",
+    image: "/assets/generated/tool-batch.jpg",
   },
   {
     id: "vectorize",
@@ -90,6 +99,17 @@ const tools: Tool[] = [
     icon: PenTool,
     path: "/vectorize",
     badge: "New",
+    image: "/assets/generated/tool-vectorize.jpg",
+  },
+  {
+    id: "pipeline",
+    title: "Vector Pipeline",
+    description:
+      "5-stage product vectorization: trace, clean, zone-split, export, and 3D preview. AI product recognition with zone-split SVGs and STL export for interactive e-commerce customizers.",
+    icon: Workflow,
+    path: "/pipeline",
+    badge: "New",
+    image: "/assets/generated/tool-pipeline.jpg",
   },
 ];
 
@@ -97,31 +117,54 @@ export function Home() {
   return (
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
       {/* Hero Section */}
-      <div className="text-center mb-16">
-        <h1 className="text-5xl md:text-6xl font-bold text-white uppercase tracking-tight mb-4">
-          WEB
-          <span className="font-light text-[#fa642c]">SYNCER</span>
-        </h1>
-        <p className="text-xl text-brand-muted max-w-2xl mx-auto">
-          Convert. Resize. Generate. Free.
-        </p>
-        <p className="text-brand-muted mt-2">
-          Professional image tools for developers and marketers.
-        </p>
+      <div className="relative text-center mb-16 py-8 overflow-hidden rounded-2xl">
+        {/* Background image */}
+        <div className="absolute inset-0">
+          <img
+            src="/assets/generated/hero-bg.jpg"
+            alt=""
+            className="w-full h-full object-cover opacity-30"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a]/80 to-[#0a0a0a]/60" />
+        </div>
+        {/* Content on top */}
+        <div className="relative z-10">
+          <h1 className="text-5xl md:text-6xl font-bold text-white uppercase tracking-tight mb-4">
+            WEB
+            <span className="font-light text-[#fa642c]">SYNCER</span>
+          </h1>
+          <p className="text-xl text-brand-muted max-w-2xl mx-auto">
+            Convert. Resize. Generate. Free.
+          </p>
+          <p className="text-brand-muted mt-2">
+            Professional image tools for developers and marketers.
+          </p>
+        </div>
       </div>
 
       {/* Tools Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
         {tools.map((tool) => (
           <Link key={tool.id} to={tool.path} className="group">
-            <div className="tool-card h-full">
-              <div className="flex items-start justify-between mb-4">
-                <tool.icon className="w-8 h-8 text-white group-hover:scale-110 transition-transform" />
+            <div className="tool-card h-full overflow-hidden">
+              {/* Preview image */}
+              <div className="relative h-36 -mx-6 -mt-6 mb-4 overflow-hidden">
+                <img
+                  src={tool.image}
+                  alt={tool.title}
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-brand-card via-brand-card/40 to-transparent" />
                 {tool.badge && (
-                  <span className="tool-card-badge">{tool.badge}</span>
+                  <span className="absolute top-3 right-3 tool-card-badge">
+                    {tool.badge}
+                  </span>
                 )}
               </div>
-              <h3 className="tool-card-title">{tool.title}</h3>
+              <div className="flex items-center gap-3 mb-2">
+                <tool.icon className="w-5 h-5 text-white flex-shrink-0" />
+                <h3 className="tool-card-title">{tool.title}</h3>
+              </div>
               <p className="tool-card-description">{tool.description}</p>
               <div className="mt-4 flex items-center text-white text-sm font-medium uppercase tracking-wide opacity-0 group-hover:opacity-100 transition-opacity">
                 <span>Open Tool</span>

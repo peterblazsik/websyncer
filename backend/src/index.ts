@@ -112,6 +112,34 @@ const MAX_BODY_SIZE = 50_000; // 50KB
 const MAX_PROMPT_LENGTH = 10_000;
 
 /**
+ * Allowed product types for classification and zone suggestion endpoints.
+ * Prevents prompt injection via arbitrary productType values.
+ */
+const VALID_PRODUCT_TYPES = [
+  "sock",
+  "insole",
+  "shoe",
+  "tshirt",
+  "bottle",
+  "unknown",
+];
+
+/**
+ * Wraps fetch with an AbortController timeout to prevent hanging on unresponsive upstream APIs.
+ */
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs = 15000,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+    clearTimeout(timeout),
+  );
+}
+
+/**
  * Rate limit check + increment. Awaits counter writes to prevent race conditions.
  * Returns null if allowed, or an error response if rate limited.
  */
@@ -259,13 +287,17 @@ app.post("/api/generate", async (c) => {
     if (rateCheck.error) return rateCheck.response;
     const { limits, currentShortTerm, currentDaily } = rateCheck;
 
-    // Body size check
-    const contentLength = c.req.header("Content-Length");
-    if (contentLength && parseInt(contentLength) > MAX_BODY_SIZE) {
+    // Body size check — read raw text to validate actual size, not the spoofable Content-Length header
+    const rawBody = await c.req.text();
+    if (rawBody.length > MAX_BODY_SIZE) {
       return c.json({ success: false, error: "Request body too large" }, 413);
     }
-
-    const body = await c.req.json();
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return c.json({ success: false, error: "Invalid JSON" }, 400);
+    }
     const { person, foreground, background, branding } = body;
 
     // Input validation
@@ -328,7 +360,7 @@ Style: High-quality lifestyle fitness photography, bright natural lighting, 1080
     }
 
     // Calling Imagen 4.0 via Generative Language API (using header auth)
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict",
       {
         method: "POST",
@@ -389,10 +421,15 @@ Style: High-quality lifestyle fitness photography, bright natural lighting, 1080
     throw new Error("No image data returned from API");
   } catch (error: any) {
     console.error("Generation failed:", error);
+    const message =
+      error?.message?.includes("safety filter") ||
+      error?.message?.includes("Generation blocked")
+        ? error.message
+        : "Failed to generate image. Please try again.";
     return c.json(
       {
         success: false,
-        error: "Failed to generate image. Please try again.",
+        error: message,
       },
       500,
     );
@@ -415,13 +452,17 @@ app.post("/api/branding/generate", async (c) => {
     if (rateCheck.error) return rateCheck.response;
     const { limits, currentShortTerm, currentDaily } = rateCheck;
 
-    // Body size check
-    const contentLength = c.req.header("Content-Length");
-    if (contentLength && parseInt(contentLength) > MAX_BODY_SIZE) {
+    // Body size check — validate actual body size
+    const rawBody = await c.req.text();
+    if (rawBody.length > MAX_BODY_SIZE) {
       return c.json({ success: false, error: "Request body too large" }, 413);
     }
-
-    const body = await c.req.json();
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return c.json({ success: false, error: "Invalid JSON" }, 400);
+    }
     const { prompt, aspectRatio } = body;
 
     if (!prompt || typeof prompt !== "string") {
@@ -458,7 +499,7 @@ app.post("/api/branding/generate", async (c) => {
     };
 
     // Calling Imagen 4.0 via Generative Language API (using header auth)
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       "https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict",
       {
         method: "POST",
@@ -507,10 +548,15 @@ app.post("/api/branding/generate", async (c) => {
     throw new Error("No image data returned from API");
   } catch (error: any) {
     console.error("Branding generation failed:", error);
+    const message =
+      error?.message?.includes("safety filter") ||
+      error?.message?.includes("Generation blocked")
+        ? error.message
+        : "Failed to generate image. Please try again.";
     return c.json(
       {
         success: false,
-        error: "Failed to generate image. Please try again.",
+        error: message,
       },
       500,
     );
@@ -533,13 +579,17 @@ app.post("/api/batch/generate", async (c) => {
     if (rateCheck.error) return rateCheck.response;
     const { limits, currentShortTerm, currentDaily } = rateCheck;
 
-    // Body size check
-    const contentLength = c.req.header("Content-Length");
-    if (contentLength && parseInt(contentLength) > MAX_BODY_SIZE) {
+    // Body size check — validate actual body size
+    const rawBody = await c.req.text();
+    if (rawBody.length > MAX_BODY_SIZE) {
       return c.json({ success: false, error: "Request body too large" }, 413);
     }
-
-    const body = await c.req.json();
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return c.json({ success: false, error: "Invalid JSON" }, 400);
+    }
     const { prompt } = body;
 
     if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
@@ -565,7 +615,7 @@ app.post("/api/batch/generate", async (c) => {
     }
 
     // Call Gemini 3 Pro Image model via generateContent endpoint
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
       {
         method: "POST",
@@ -666,6 +716,362 @@ app.post("/api/batch/generate", async (c) => {
       {
         success: false,
         error: "Failed to generate image. Please try again.",
+      },
+      500,
+    );
+  }
+});
+
+// ─── Product Classification ───────────────────────────────────────
+
+/**
+ * Max allowed image payload size for classification (5MB base64)
+ */
+const MAX_CLASSIFY_BODY_SIZE = 7_000_000;
+
+/**
+ * Extract mime type and raw base64 data from a data URL or raw base64 string.
+ */
+function parseBase64Image(input: string): { mimeType: string; data: string } {
+  const match = input.match(/^data:([^;]+);base64,(.+)$/);
+  if (match) return { mimeType: match[1], data: match[2] };
+  // Assume raw base64 PNG if no data URL prefix
+  return { mimeType: "image/png", data: input };
+}
+
+app.post("/api/classify-product", async (c) => {
+  try {
+    const ip = getClientIp(c);
+    if (!ip) {
+      return c.json(
+        { success: false, error: "Unable to identify client" },
+        400,
+      );
+    }
+
+    // Rate limit check
+    const rateCheck = await checkAndIncrementRateLimit(ip, c.env);
+    if (rateCheck.error) return rateCheck.response;
+
+    // Body size check — validate actual body size
+    const rawBody = await c.req.text();
+    if (rawBody.length > MAX_CLASSIFY_BODY_SIZE) {
+      return c.json({ success: false, error: "Request body too large" }, 413);
+    }
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return c.json({ success: false, error: "Invalid JSON" }, 400);
+    }
+    const { image, viewBox } = body as {
+      image?: string;
+      viewBox?: { width: number; height: number };
+    };
+
+    if (!image || typeof image !== "string") {
+      return c.json(
+        {
+          success: false,
+          error: "Missing required field: image (base64 string)",
+        },
+        400,
+      );
+    }
+
+    // Validate viewBox dimensions if provided to prevent abuse
+    if (viewBox) {
+      if (
+        typeof viewBox.width !== "number" ||
+        typeof viewBox.height !== "number" ||
+        !isFinite(viewBox.width) ||
+        !isFinite(viewBox.height) ||
+        viewBox.width <= 0 ||
+        viewBox.height <= 0 ||
+        viewBox.width > 10000 ||
+        viewBox.height > 10000
+      ) {
+        return c.json(
+          { success: false, error: "Invalid viewBox dimensions" },
+          400,
+        );
+      }
+    }
+
+    const apiKey = c.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return c.json({ success: false, error: "API configuration error" }, 500);
+    }
+
+    const { mimeType, data } = parseBase64Image(image);
+
+    // Build the classification prompt — viewBox dimensions enable zone suggestions
+    let prompt = `You are a product recognition system for a manufacturing SVG template generator.
+
+Analyze this product photo and return a JSON object with:
+1. "productType": one of "sock", "insole", "shoe", "tshirt", "bottle", or "unknown"
+2. "confidence": number between 0 and 1`;
+
+    if (viewBox) {
+      prompt += `
+
+If viewBox dimensions are provided (width: ${viewBox.width}, height: ${viewBox.height}), also suggest zone cut positions:
+3. "suggestedCuts": array of { "axis": "horizontal"|"vertical", "position": number, "label": string }
+4. "suggestedZones": array of { "id": string, "label": string, "yMin": number, "yMax": number, "xMin": number, "xMax": number }
+
+The cuts should be placed at natural transition points of the product's anatomy.
+For socks: calf/ankle/heel/foot/toe boundaries
+For shoes: toe box/vamp/quarter/heel counter/sole boundaries
+For insoles: toe/ball/arch/heel boundaries
+For t-shirts: collar/chest/sleeves/body boundaries
+For bottles: cap/neck/label/body/base boundaries`;
+    }
+
+    prompt += `
+
+Return ONLY valid JSON, no markdown formatting, no code blocks.`;
+
+    const geminiResponse = await fetchWithTimeout(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }, { inlineData: { mimeType, data } }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 1024,
+          },
+        }),
+      },
+    );
+
+    if (!geminiResponse.ok) {
+      const errorText = await geminiResponse.text();
+      console.error("Gemini classification error:", errorText);
+      return c.json(
+        {
+          success: false,
+          error: `Classification failed: ${geminiResponse.status}`,
+        },
+        502,
+      );
+    }
+
+    const geminiData = (await geminiResponse.json()) as any;
+
+    // Extract text response from Gemini candidates
+    const rawText =
+      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+
+    let classification: {
+      productType: string;
+      confidence: number;
+      suggestedCuts?: any[];
+      suggestedZones?: any[];
+    };
+
+    try {
+      // Strip potential markdown code fences that models sometimes return despite instructions
+      const cleaned = rawText
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+      classification = JSON.parse(cleaned);
+    } catch {
+      console.error("Failed to parse Gemini classification JSON:", rawText);
+      classification = { productType: "unknown", confidence: 0 };
+    }
+
+    return c.json({
+      success: true,
+      productType: classification.productType,
+      confidence: classification.confidence,
+      suggestedCuts: classification.suggestedCuts,
+      suggestedZones: classification.suggestedZones,
+    });
+  } catch (error: any) {
+    console.error("Classification failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Classification failed. Please try again.",
+      },
+      500,
+    );
+  }
+});
+
+// ─── Zone Suggestion from Cleaned Outline ─────────────────────────
+
+app.post("/api/suggest-zones", async (c) => {
+  try {
+    const ip = getClientIp(c);
+    if (!ip) {
+      return c.json(
+        { success: false, error: "Unable to identify client" },
+        400,
+      );
+    }
+
+    // Rate limit check
+    const rateCheck = await checkAndIncrementRateLimit(ip, c.env);
+    if (rateCheck.error) return rateCheck.response;
+
+    // Body size check — validate actual body size
+    const rawBody = await c.req.text();
+    if (rawBody.length > MAX_CLASSIFY_BODY_SIZE) {
+      return c.json({ success: false, error: "Request body too large" }, 413);
+    }
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return c.json({ success: false, error: "Invalid JSON" }, 400);
+    }
+    const { image, productType, viewBox } = body as {
+      image?: string;
+      productType?: string;
+      viewBox?: { width: number; height: number };
+    };
+
+    if (!image || typeof image !== "string") {
+      return c.json(
+        { success: false, error: "Missing required field: image (base64 PNG)" },
+        400,
+      );
+    }
+    if (!productType || typeof productType !== "string") {
+      return c.json(
+        { success: false, error: "Missing required field: productType" },
+        400,
+      );
+    }
+    // Validate productType against allowlist to prevent prompt injection
+    if (!VALID_PRODUCT_TYPES.includes(productType)) {
+      return c.json({ success: false, error: "Invalid product type" }, 400);
+    }
+    if (
+      !viewBox ||
+      typeof viewBox.width !== "number" ||
+      typeof viewBox.height !== "number"
+    ) {
+      return c.json(
+        {
+          success: false,
+          error: "Missing required field: viewBox ({ width, height })",
+        },
+        400,
+      );
+    }
+
+    const apiKey = c.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return c.json({ success: false, error: "API configuration error" }, 500);
+    }
+
+    const { mimeType, data } = parseBase64Image(image);
+
+    const prompt = `You are a product zone positioning system for a manufacturing SVG template generator.
+
+You are looking at a cleaned SVG outline of a "${productType}" product rendered as an image.
+The viewBox is ${viewBox.width}x${viewBox.height}.
+
+Based on the actual shape of the outline, suggest optimal cut line positions to divide this product into its natural anatomical zones.
+
+For a sock: calf (top), ankle band, heel, foot, toe (bottom)
+For an insole: toe (top), ball, arch, heel (bottom)
+For a shoe: toe box (top), vamp, quarter, heel counter, sole (bottom)
+For a t-shirt: collar (top), chest/sleeves (middle), body (bottom)
+For a bottle: cap (top), neck, label, body, base (bottom)
+
+Place cuts where the shape naturally transitions — where it narrows, widens, or changes curvature.
+
+Return ONLY valid JSON with:
+{
+  "suggestedCuts": [
+    { "axis": "horizontal" or "vertical", "position": <number within viewBox>, "label": "<boundary name>" }
+  ],
+  "suggestedZones": [
+    { "id": "<zone_id>", "label": "<Zone Label>", "yMin": <number>, "yMax": <number>, "xMin": 0, "xMax": ${viewBox.width} }
+  ]
+}`;
+
+    const geminiResponse = await fetchWithTimeout(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }, { inlineData: { mimeType, data } }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 1024,
+          },
+        }),
+      },
+    );
+
+    if (!geminiResponse.ok) {
+      const errorText = await geminiResponse.text();
+      console.error("Gemini zone suggestion error:", errorText);
+      return c.json(
+        {
+          success: false,
+          error: `Zone suggestion failed: ${geminiResponse.status}`,
+        },
+        502,
+      );
+    }
+
+    const geminiData = (await geminiResponse.json()) as any;
+    const rawText =
+      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+
+    let parsed: {
+      suggestedCuts?: any[];
+      suggestedZones?: any[];
+    };
+
+    try {
+      const cleaned = rawText
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+      parsed = JSON.parse(cleaned);
+    } catch {
+      console.error("Failed to parse Gemini zone suggestion JSON:", rawText);
+      return c.json(
+        { success: false, error: "Failed to parse AI response" },
+        502,
+      );
+    }
+
+    return c.json({
+      success: true,
+      suggestedCuts: parsed.suggestedCuts ?? [],
+      suggestedZones: parsed.suggestedZones ?? [],
+    });
+  } catch (error: any) {
+    console.error("Zone suggestion failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Zone suggestion failed. Please try again.",
       },
       500,
     );
