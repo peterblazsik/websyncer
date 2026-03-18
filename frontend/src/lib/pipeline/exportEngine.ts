@@ -87,9 +87,12 @@ function buildTemplateSvg(
     .replace(/\bfill:[^;"]+/g, "fill:black");
 
   // Build outline content (stroke only, no fill)
+  // Must also remove stroke="none" that Potrace adds — it overrides the parent's stroke
   const outlineContent = innerContent
     .replace(/\bfill="[^"]*"/g, 'fill="none"')
-    .replace(/\bfill:[^;"]+/g, "fill:none");
+    .replace(/\bfill:[^;"]+/g, "fill:none")
+    .replace(/\bstroke="none"/g, "")
+    .replace(/\bstroke:none/g, "");
 
   // Zone rects — hidden by default, there for programmatic access
   const zoneRects = config.zones
