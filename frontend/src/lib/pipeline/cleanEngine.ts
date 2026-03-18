@@ -7,17 +7,24 @@ import type {
 import { parseSvgPaths } from "./svgPathParser";
 import { calculatePathArea } from "./bezierMath";
 
+export type CleanMode = "all" | "outline" | "smart";
+
 export interface CleanOptions {
   minAreaThreshold: number;
-  removeHoles: boolean;
+  cleanMode: CleanMode;
+  /** For "smart" mode: keep paths whose area >= this % of the largest path (0-100) */
+  smartThresholdPct: number;
   targetWidth: number;
   targetHeight: number;
   padding: number;
+  /** @deprecated Use cleanMode instead */
+  removeHoles?: boolean;
 }
 
 export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
   minAreaThreshold: 100,
-  removeHoles: false,
+  cleanMode: "smart",
+  smartThresholdPct: 5,
   targetWidth: 280,
   targetHeight: 410,
   padding: 10,
@@ -161,9 +168,20 @@ export function cleanSvg(
   let filtered = pathsWithArea.filter(
     (p) => p.area >= options.minAreaThreshold,
   );
-  if (options.removeHoles && filtered.length > 1) {
+
+  // Determine effective clean mode (handle legacy removeHoles flag)
+  const mode = options.removeHoles ? "outline" : (options.cleanMode ?? "smart");
+
+  if (mode === "outline" && filtered.length > 1) {
+    // Keep only the single largest path
     filtered = [filtered[0]];
+  } else if (mode === "smart" && filtered.length > 1) {
+    // Keep paths whose area is at least N% of the largest path
+    const largestArea = filtered[0].area;
+    const threshold = largestArea * ((options.smartThresholdPct ?? 5) / 100);
+    filtered = filtered.filter((p) => p.area >= threshold);
   }
+  // mode === "all": keep everything above minAreaThreshold
 
   const keptDAttributes = new Set(filtered.map((f) => f.parsedPath.d));
   const removedCount = allPaths.length - filtered.length;

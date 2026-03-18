@@ -6,7 +6,7 @@ import {
   cleanSvg,
   DEFAULT_CLEAN_OPTIONS,
 } from "../../lib/pipeline/cleanEngine";
-import type { CleanOptions } from "../../lib/pipeline/cleanEngine";
+import type { CleanOptions, CleanMode } from "../../lib/pipeline/cleanEngine";
 import { usePersistedState } from "../../hooks/usePersistedState";
 import { SvgPreview } from "./SvgPreview";
 
@@ -178,18 +178,77 @@ export function StageClean({
             </p>
           </div>
 
-          {/* Remove holes */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={options.removeHoles}
-              onChange={(e) => updateOption("removeHoles", e.target.checked)}
-              className="w-4 h-4"
-            />
-            <span className="text-sm text-brand-text">
-              Remove holes (keep outline only)
-            </span>
-          </label>
+          {/* Clean mode */}
+          <div>
+            <label className="form-label">Path Selection</label>
+            <div className="grid grid-cols-3 gap-1">
+              {(
+                [
+                  {
+                    mode: "smart" as CleanMode,
+                    label: "Smart",
+                    desc: "Auto-detect outline",
+                  },
+                  {
+                    mode: "outline" as CleanMode,
+                    label: "Outline",
+                    desc: "Largest path only",
+                  },
+                  {
+                    mode: "all" as CleanMode,
+                    label: "All",
+                    desc: "Keep everything",
+                  },
+                ] as const
+              ).map(({ mode, label, desc }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => updateOption("cleanMode", mode)}
+                  className={`px-2 py-1.5 text-xs rounded transition-colors ${
+                    (options.cleanMode ?? "smart") === mode
+                      ? "bg-white text-black font-bold"
+                      : "bg-black/30 text-brand-muted hover:text-white border border-brand-border"
+                  }`}
+                >
+                  {label}
+                  <span className="block text-[10px] mt-0.5 opacity-70 font-normal">
+                    {desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-brand-muted mt-1.5">
+              {(options.cleanMode ?? "smart") === "smart"
+                ? `Smart: keeps paths ≥ ${options.smartThresholdPct ?? 5}% of the largest. Captures the full product shape including heels, arches, etc.`
+                : (options.cleanMode ?? "smart") === "outline"
+                  ? "Outline: keeps only the single largest path. May lose details like heel regions."
+                  : "All: keeps every path above the min area threshold."}
+            </p>
+          </div>
+
+          {/* Smart threshold slider — only in smart mode */}
+          {(options.cleanMode ?? "smart") === "smart" && (
+            <div>
+              <label className="form-label">
+                Smart Threshold: {options.smartThresholdPct ?? 5}%
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={50}
+                step={1}
+                value={options.smartThresholdPct ?? 5}
+                onChange={(e) =>
+                  updateOption("smartThresholdPct", parseInt(e.target.value))
+                }
+                className="w-full"
+              />
+              <p className="text-xs text-brand-muted mt-1">
+                Keep paths whose area is at least this % of the largest path
+              </p>
+            </div>
+          )}
 
           {/* Target viewBox */}
           <div className="grid grid-cols-2 gap-2">
