@@ -8,6 +8,7 @@ import type {
 import {
   generateExport,
   generateArtinJson,
+  type ExportMode,
 } from "../../lib/pipeline/exportEngine";
 import { downloadFile } from "../../lib/downloadHelpers";
 import { usePersistedState } from "../../hooks/usePersistedState";
@@ -40,16 +41,21 @@ export function StageExport({
     "pipeline-stroke-width",
     1.5,
   );
+  const [exportMode, setExportMode] = usePersistedState<ExportMode>(
+    "pipeline-export-mode",
+    "template",
+  );
 
-  // Auto-generate export on mount and when outline options change
+  // Auto-generate export on mount and when options change
   useEffect(() => {
     const result = generateExport(zoneSplitOutput, cleanSvgString, {
       includeOutline,
       strokeWidth,
+      mode: exportMode,
     });
     onExportComplete(result);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includeOutline, strokeWidth]);
+  }, [includeOutline, strokeWidth, exportMode]);
 
   const handleDownloadSvg = useCallback(() => {
     if (!exportOutput) return;
@@ -97,6 +103,46 @@ export function StageExport({
       <div className="w-full lg:w-80 flex-shrink-0 flex flex-col bg-brand-card overflow-y-auto max-h-[40vh] lg:max-h-none">
         <div className="p-4 space-y-4">
           <h3 className="form-label">Export</h3>
+
+          {/* Export mode */}
+          <div>
+            <label className="form-label">Export Mode</label>
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                onClick={() => setExportMode("template")}
+                className={`px-3 py-2 text-xs rounded text-left transition-colors ${
+                  exportMode === "template"
+                    ? "bg-white text-black font-bold"
+                    : "bg-black/30 text-brand-muted hover:text-white border border-brand-border"
+                }`}
+              >
+                Template
+                <span className="block text-[10px] mt-0.5 opacity-70">
+                  Outline + clipPath only
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportMode("zones")}
+                className={`px-3 py-2 text-xs rounded text-left transition-colors ${
+                  exportMode === "zones"
+                    ? "bg-white text-black font-bold"
+                    : "bg-black/30 text-brand-muted hover:text-white border border-brand-border"
+                }`}
+              >
+                Zones
+                <span className="block text-[10px] mt-0.5 opacity-70">
+                  Colored zone preview
+                </span>
+              </button>
+            </div>
+            <p className="text-[10px] text-brand-muted mt-1.5">
+              {exportMode === "template"
+                ? "Clean SVG for ARTIN/O_S_v2 — outline as clipPath, zones as invisible metadata. AI designs clip to the product shape."
+                : "Colored zones baked into the SVG — for reference and previewing only."}
+            </p>
+          </div>
 
           {/* Zone summary */}
           {exportOutput && (

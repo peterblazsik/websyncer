@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Upload, Loader2 } from "lucide-react";
+import { Upload, Loader2, Crop } from "lucide-react";
 import { toast } from "sonner";
 import type { TraceParams } from "../../types/vectorize";
 import type {
@@ -10,6 +10,7 @@ import { DEFAULT_PARAMS } from "../../types/vectorize";
 import { traceImage, loadImageFromFile } from "../../lib/vectorizeEngine";
 import { usePersistedState } from "../../hooks/usePersistedState";
 import { SvgPreview } from "./SvgPreview";
+import { ImageEditor } from "./ImageEditor";
 
 // Product photo preset: optimized for product photography
 const PRODUCT_PHOTO_PRESET: Partial<TraceParams> = {
@@ -46,6 +47,7 @@ export function StageTrace({
   const [isTracing, setIsTracing] = useState(false);
   const [isClassifying, setIsClassifying] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const classifyProduct = useCallback(
@@ -148,6 +150,20 @@ export function StageTrace({
   ) => {
     setParams((prev) => ({ ...prev, [key]: value }));
   };
+
+  // When editing mode is active, the ImageEditor takes over the full layout
+  if (isEditing && sourceUrl) {
+    return (
+      <ImageEditor
+        sourceUrl={sourceUrl}
+        onApply={(img, url) => {
+          onImageLoaded(img, url);
+          setIsEditing(false);
+        }}
+        onCancel={() => setIsEditing(false)}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col lg:flex-row h-full">
@@ -333,6 +349,16 @@ export function StageTrace({
 
         {/* Action buttons */}
         <div className="mt-auto p-4 border-t border-brand-border space-y-2">
+          {sourceImage && (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              className="btn-secondary w-full flex items-center justify-center gap-2 text-xs"
+            >
+              <Crop className="w-4 h-4" />
+              Crop & Rotate
+            </button>
+          )}
           <button
             type="button"
             onClick={runTrace}
