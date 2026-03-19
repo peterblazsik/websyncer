@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
+import {
+  OrbitControls,
+  PerspectiveCamera,
+  Bounds,
+  Center,
+} from "@react-three/drei";
 import * as THREE from "three";
 import { Download } from "lucide-react";
 import { toast } from "sonner";
@@ -21,6 +26,9 @@ const BEVEL_SETTINGS = {
   curveSegments: 12,
 } as const;
 
+/** Target size for the normalized mesh (fits in a ~10 unit cube) */
+const TARGET_SIZE = 10;
+
 interface Stage3DProps {
   zoneSplitOutput: ZoneSplitStageOutput;
   cleanSvg: string;
@@ -30,25 +38,33 @@ interface Stage3DProps {
 function ProductMesh({
   outlinePath,
   depth,
+  viewBox,
 }: {
   outlinePath: string;
   depth: number;
+  viewBox: { width: number; height: number };
 }) {
+  // Normalize: scale the mesh so the longest dimension = TARGET_SIZE
+  const scaleFactor = TARGET_SIZE / Math.max(viewBox.width, viewBox.height);
+
   const geometry = useMemo(() => {
     if (!outlinePath) return null;
     try {
       const shape = svgPathToShape(outlinePath);
       const geo = new THREE.ExtrudeGeometry(shape, {
-        depth,
+        depth: depth * scaleFactor,
         ...BEVEL_SETTINGS,
+        bevelThickness: 0.5 * scaleFactor,
+        bevelSize: 0.3 * scaleFactor,
       });
       geo.center();
+      geo.scale(scaleFactor, scaleFactor, 1);
       return geo;
     } catch (err) {
       console.error("Failed to create 3D mesh:", err);
       return null;
     }
-  }, [outlinePath, depth]);
+  }, [outlinePath, depth, scaleFactor]);
 
   useEffect(() => {
     return () => {
@@ -59,7 +75,7 @@ function ProductMesh({
   if (!geometry) return null;
   return (
     <mesh geometry={geometry}>
-      <meshStandardMaterial color="#e0e0e0" />
+      <meshStandardMaterial color="#e0e0e0" metalness={0.1} roughness={0.6} />
     </mesh>
   );
 }
@@ -110,29 +126,32 @@ export function Stage3D({ zoneSplitOutput, cleanSvg, onBack }: Stage3DProps) {
     }
   }, [outlinePath, depth, config.name]);
 
-  // Calculate camera distance based on viewBox
-  const cameraDistance =
-    Math.max(config.viewBox.width, config.viewBox.height) * 1.5;
-
   return (
     <div className="flex flex-col lg:flex-row h-full">
       {/* 3D Viewer */}
-      <div className="flex-1 min-h-[200px] border-b lg:border-b-0 lg:border-r border-brand-border bg-black relative">
+      <div className="flex-1 min-h-[200px] border-b lg:border-b-0 lg:border-r border-brand-border bg-[#111] relative">
         <Canvas onPointerDown={() => setShowHint(false)}>
-          <PerspectiveCamera
-            makeDefault
-            position={[0, 0, cameraDistance]}
-            fov={45}
+          <PerspectiveCamera makeDefault position={[0, 0, 20]} fov={45} />
+          <OrbitControls
+            enableDamping
+            dampingFactor={0.1}
+            minDistance={3}
+            maxDistance={50}
           />
-          <OrbitControls enableDamping dampingFactor={0.1} />
-          <ambientLight intensity={0.5} />
-          <directionalLight position={[100, 100, 100]} intensity={1} />
-          <directionalLight position={[-100, -50, -100]} intensity={0.3} />
-          <group>
-            <ProductMesh outlinePath={outlinePath} depth={depth} />
-          </group>
+          <ambientLight intensity={0.6} />
+          <directionalLight position={[10, 10, 10]} intensity={1} />
+          <directionalLight position={[-5, -5, -10]} intensity={0.3} />
+          <Bounds fit clip observe margin={1.4}>
+            <Center>
+              <ProductMesh
+                outlinePath={outlinePath}
+                depth={depth}
+                viewBox={config.viewBox}
+              />
+            </Center>
+          </Bounds>
           <gridHelper
-            args={[cameraDistance, 20, "#333333", "#222222"]}
+            args={[20, 20, "#333333", "#222222"]}
             rotation={[Math.PI / 2, 0, 0]}
           />
         </Canvas>
